@@ -2,6 +2,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
 [![Build Status](https://github.com/mletenay/home-assistant-goodwe-inverter/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/mletenay/home-assistant-goodwe-inverter/actions/workflows/hassfest.yaml)
 ![GitHub Release](https://img.shields.io/github/v/release/mletenay/home-assistant-goodwe-inverter)
+<img src="https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=integration%20usage&suffix=%20installs&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.goodwe.total">
 
 ## GoodWe solar inverter for Home Assistant (experimental)
 
@@ -14,9 +15,9 @@ Use at own risk.
 
 - EMS modes
 - Special work modes `Eco charge mode` and `Eco discharge mode` (24/7 with defined power and SoC).
-- Network configuration parameters `Scan iterval`, `Network retry attempts`, `Network request timeout`.
-- Switch `Export Limit Switch`.
-- Switch `Load Control` (for ET+ inverters).
+- Network configuration parameters `Port`, `Modbus id`, `Scan iterval`, `Network retry attempts`, `Network request timeout`.
+- Input `SoC upper limit`, `DoD (backup)`
+- Switch `DOD holding`, `Export Limit`. `Load Control`, `Backup supply`
 - Switch and SoC/Power inputs for `Fast Charging` functionality.
 - `Start inverter` and `Stop inverter` buttons for grid-only inverters.
 - Services for getting/setting inverter configuration parameters
@@ -27,98 +28,96 @@ If you have been using this custom component and want to migrate to standard HA 
 
 (If you uninstall the integration first, then uninstall HACS component and install integration back again, it will also work, but you will probably loose some history and settings since HA integration uses slightly different default entity names.)
 
-## Home Assistant Energy Dashboard
-
-The integration provides several values suitable for the energy dashboard introduced to HA in v2021.8.
-The best supported are the inverters of ET/EH families, where the sensors `meter_e_total_exp`, `meter_e_total_imp`, `e_total`, `e_bat_charge_total` and `e_bat_discharge_total` are the most suitable for the dashboard measurements and statistics.
-For the other inverter families, if such sensors are not directly available from the inverter, they can be calculated, see paragraph below.
-
 ## EMS modes
 
 The integration exposes inverter's EMS mode and EMS power (limit) settings.
 The following list should explain individual modes and their behavior.
 
-* __Auto__
-  * _Scenario:_ Self-use.
-  * `PBattery = PInv - Pmeter - Ppv` (Discharge/Charge)
-  * The battery power is controlled by the meter power when the meter communication is normal.
+- **Auto**
+  - _Scenario:_ Self-use.
+  - `PBattery = PInv - Pmeter - Ppv` (Discharge/Charge)
+  - The battery power is controlled by the meter power when the meter communication is normal.
 
-* __Charge PV__
-  * _Scenario:_ Control the battery to keep charging.
-  * `PBattery = Xmax + PV` (Charge)
-  * Xmax is to allow the power to be taken from the grid, and PV power is preferred. When set to 0, only PV power is used. Charging power will be limited by charging current limit.
-  * _Interpretation:_ Charge Battery from PV (high priority) or Grid (low priority); EmsPowerSet = negative ESS ActivePower (if possible because of PV).
-  * Grid: low priority, PV: high priority, Battery: Charge Mode, The control object is 'Grid'
+- **Charge PV**
+  - _Scenario:_ Control the battery to keep charging.
+  - `PBattery = Xmax + PV` (Charge)
+  - Xmax is to allow the power to be taken from the grid, and PV power is preferred. When set to 0, only PV power is used. Charging power will be limited by charging current limit.
+  - _Interpretation:_ Charge Battery from PV (high priority) or Grid (low priority); EmsPowerSet = negative ESS ActivePower (if possible because of PV).
+  - Grid: low priority, PV: high priority, Battery: Charge Mode, The control object is 'Grid'
 
+- **Discharge PV**
+  - _Scenario:_ Control the battery to keep discharging.
+  - `PBattery = Xmax` (Discharge)
+  - Xmax is the allowable discharge power of the battery. When the power fed into the grid is limited, PV power will be used first.
+  - _Interpretation:_ ESS ActivePower = PV power + EmsPowerSet (i.e. battery discharge); useful for surplus feed-to-grid.
+  - PV: high priority, Battery: low priority, Grid: Energy Out Mode, The control object is 'Battery'
 
-* __Discharge PV__
-  * _Scenario:_ Control the battery to keep discharging.
-  * `PBattery = Xmax` (Discharge)
-  * Xmax is the allowable discharge power of the battery. When the power fed into the grid is limited, PV power will be used first.
-  * _Interpretation:_ ESS ActivePower = PV power + EmsPowerSet (i.e. battery discharge); useful for surplus feed-to-grid.
-  * PV: high priority, Battery: low priority, Grid: Energy Out Mode, The control object is 'Battery'
+- **Import AC**
+  - _Scenario:_ The inverter is used as a unit for power grid energy scheduling.
+  - `PBattery = Xset + PV` (Charge)
+  - Xset refers to the power purchased from the power grid. The power purchased from the grid is preferred. If the PV power is too large, the MPPT power will be limited. (grid side load is not considered)
+  - _Interpretation:_ Charge Battery from Grid (high priority) or PV (low priority); EmsPowerSet = negative ESS ActivePower; as long as BMS_CHARGE_MAX_CURRENT is > 0, no AC-Power is exported; when BMS_CHARGE_MAX_CURRENT == 0, PV surplus feed in starts!
+  - Grid: high priority, PV: low priority, Battery: Charge Mode, The control object is 'Grid'
 
-* __Import AC__
-  * _Scenario:_ The inverter is used as a unit for power grid energy scheduling.
-  * `PBattery = Xset + PV` (Charge)
-  * Xset refers to the power purchased from the power grid. The power purchased from the grid is preferred. If the PV power is too large, the MPPT power will be limited. (grid side load is not considered)
-  * _Interpretation:_ Charge Battery from Grid (high priority) or PV (low priority); EmsPowerSet = negative ESS ActivePower; as long as BMS_CHARGE_MAX_CURRENT is > 0, no AC-Power is exported; when BMS_CHARGE_MAX_CURRENT == 0, PV surplus feed in starts!
-  * Grid: high priority, PV: low priority, Battery: Charge Mode, The control object is 'Grid'
+- **Export AC**
+  - _Scenario:_ The inverter is used as a unit for power grid energy scheduling.
+  - `PBattery = Xset` (Discharge)
+  - Xset is to sell power to the grid. PV power is preferred. When PV energy is insufficient, the battery will discharge. PV power will be limited by x. (grid side load is not considered)
+  - _Interpretation:_ EmsPowerSet = positive ESS ActivePower. But PV will be limited, i.e. remaining power is not used to charge battery.
+  - PV: high priority, Battery: low priority, Grid: Energy Out Mode, The control object is 'Grid'
 
-* __Export AC__
-  * _Scenario:_ The inverter is used as a unit for power grid energy scheduling.
-  * `PBattery = Xset` (Discharge)
-  * Xset is to sell power to the grid. PV power is preferred. When PV energy is insufficient, the battery will discharge. PV power will be limited by x. (grid side load is not considered)
-  * _Interpretation:_ EmsPowerSet = positive ESS ActivePower. But PV will be limited, i.e. remaining power is not used to charge battery.
-  * PV: high priority, Battery: low priority, Grid: Energy Out Mode, The control object is 'Grid'
+- **Conserve**
+  - _Scenario:_ Off-grid reservation mode.
+  - `PBattery = PV` (Charge)
+  - In on-grid mode, the battery is continuously charged, and only PV power (AC Couple model takes 10% of the rated power of the power grid) is used. The battery can only discharge in off-grid mode.
 
-* __Conserve__
-  * _Scenario:_ Off-grid reservation mode.
-  * `PBattery = PV` (Charge)
-  * In on-grid mode, the battery is continuously charged, and only PV power (AC Couple model takes 10% of the rated power of the power grid) is used. The battery can only discharge in off-grid mode.
+- **Off-Grid**
+  - _Scenario:_ Off-Grid Mode.
+  - `PBattery = Pbackup - Ppv` (Charge/Discharge)
+  - Forced off-grid operation.
 
-* __Off-Grid__
-  * _Scenario:_ Off-Grid Mode.
-  * `PBattery = Pbackup - Ppv` (Charge/Discharge)
-  * Forced off-grid operation.
+- **Battery Standby**
+  - _Scenario:_ The inverter is used as a unit for power grid energy scheduling.
+  - `PBattery = 0` (Standby)
+  - The battery does not charge and discharge
 
-* __Battery Standby__
-  * _Scenario:_ The inverter is used as a unit for power grid energy scheduling.
-  * `PBattery = 0` (Standby)
-  * The battery does not charge and discharge
+- **Buy Power**
+  - _Scenario:_ Regional energy management.
+  - `PBattery = PInv - (Pmeter + Xset) - Ppv` (Charge/Discharge)
+  - When the meter communication is normal, the power purchased from the power grid is controlled as Xset. When the PV power is too large, the MPPT power will be limited. When the load is too large, the battery will discharge.
+  - _Interpretation:_ Control power at the point of common coupling.
+  - Grid: high priority, PV: low priority, Battery: Energy In and Out Mode, The control object is 'Grid'
 
-* __Buy Power__
-  * _Scenario:_ Regional energy management.
-  * `PBattery = PInv - (Pmeter + Xset) - Ppv` (Charge/Discharge)
-  * When the meter communication is normal, the power purchased from the power grid is controlled as Xset. When the PV power is too large, the MPPT power will be limited. When the load is too large, the battery will discharge.
-  * _Interpretation:_ Control power at the point of common coupling.
-  * Grid: high priority, PV: low priority, Battery: Energy In and Out Mode, The control object is 'Grid'
+- **Sell Power**
+  - _Scenario:_ Regional energy management.
+  - `PBattery = PInv - (Pmeter - Xset) - Ppv` (Charge/Discharge)
+  - When the communication of electricity meter is normal, the power sold from the power grid is controlled as Xset, PV power is preferred, and the battery discharges when PV energy is insufficient.PV power will be limited by Xset.
+  - _Interpretation:_ Control power at the point of common coupling.
+  - PV: high priority, Battery: low priority, Grid: Energy Out Mode, The control object is 'Grid'
 
-* __Sell Power__
-  * _Scenario:_ Regional energy management.
-  * `PBattery = PInv - (Pmeter - Xset) - Ppv` (Charge/Discharge)
-  * When the communication of electricity meter is normal, the power sold from the power grid is controlled as Xset, PV power is preferred, and the battery discharges when PV energy is insufficient.PV power will be limited by Xset.
-  * _Interpretation:_ Control power at the point of common coupling.
-  * PV: high priority, Battery: low priority, Grid: Energy Out Mode, The control object is 'Grid'
+- **Charge Battery**
+  - _Scenario:_ Force the battery to work at set power value.
+  - `PBattery = Xset` (Charge)
+  - Xset is the charging power of the battery. PV power is preferred. When PV power is insufficient, it will buy power from the power grid. The charging power is also affected by the charging current limit.
+  - _Interpretation:_ Charge Battery from PV (high priority) or Grid (low priority); priorities are inverted compared to IMPORT_AC.
+  - PV: high priority, Grid: low priority, Battery: Energy In Mode, The control object is 'Battery'
 
-* __Charge Battery__
-  * _Scenario:_ Force the battery to work at set power value.
-  * `PBattery = Xset` (Charge)
-  * Xset is the charging power of the battery. PV power is preferred. When PV power is insufficient, it will buy power from the power grid. The charging power is also affected by the charging current limit.
-  * _Interpretation:_ Charge Battery from PV (high priority) or Grid (low priority); priorities are inverted compared to IMPORT_AC.
-  * PV: high priority, Grid: low priority, Battery: Energy In Mode, The control object is 'Battery'
+- **Discharge Battery**
+  - _Scenario:_ Force the battery to work at set power value.
+  - `PBattery = Xset` (Discharge)
+  - Xset is the discharge power of the battery, and the battery discharge has priority. If the PV power is too large, MPPT will be limited. Discharge power is also affected by discharge current limit.
+  - _Interpretation:_ ???
+  - PV: low priority, Battery: high priority, Grid: Energy In Mode, The control object is 'Battery'
 
-* __Discharge Battery__
-  * _Scenario:_ Force the battery to work at set power value.
-  * `PBattery = Xset` (Discharge)
-  * Xset is the discharge power of the battery, and the battery discharge has priority. If the PV power is too large, MPPT will be limited. Discharge power is also affected by discharge current limit.
-  * _Interpretation:_ ???
-  * PV: low priority, Battery: high priority, Grid: Energy In Mode, The control object is 'Battery'
+- **Stopped**
+  - _Scenario:_ System shutdown.
+  - Stop working and turn to wait mode
 
-* __Stopped__
-	* _Scenario:_ System shutdown.
-  * Stop working and turn to wait mode
+## Home Assistant Energy Dashboard
 
+The integration provides several values suitable for the energy dashboard introduced to HA in v2021.8.
+The best supported are the inverters of ET/EH families, where the sensors `meter_e_total_exp`, `meter_e_total_imp`, `e_total`, `e_bat_charge_total` and `e_bat_discharge_total` are the most suitable for the dashboard measurements and statistics.
+For the other inverter families, if such sensors are not directly available from the inverter, they can be calculated, see paragraph below.
 
 ## Cumulative energy values
 

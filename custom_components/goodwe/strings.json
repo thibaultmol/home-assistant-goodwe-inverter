@@ -38,7 +38,7 @@
       "eco_mode_soc": {
         "name": "Eco mode SoC"
       },
-            "ems_power_limit": {
+      "ems_power_limit": {
         "name": "EMS power limit"
       },
       "fast_charging_power": {
