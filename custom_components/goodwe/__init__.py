@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from goodwe import InverterError, connect
+from goodwe import Inverter, InverterError, connect
 from goodwe.const import GOODWE_TCP_PORT, GOODWE_UDP_PORT
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_PROTOCOL, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
@@ -149,9 +149,19 @@ async def async_migrate_entry(
             "Config entry %s is version %s, newer than supported version %s",
             config_entry.title,
             version,
-            3,
+            2,
         )
         return False
+
+    if version == 3:
+        # Downgrade from version 3 to version 2 (for users switching from official HA integration)
+        # Version 3 entries have the same data structure as version 2, just downgrade the version number
+        _LOGGER.info(
+            "Migrating config entry %s from version 3 to version 2",
+            config_entry.title,
+        )
+        hass.config_entries.async_update_entry(config_entry, version=2)
+        version = 2
 
     if version == 1:
         # Update from version 1 to version 2 adding the CONF_PORT to the config entry
@@ -182,32 +192,5 @@ async def async_migrate_entry(
             CONF_MODBUS_ID: data.get(CONF_MODBUS_ID),
         }
         hass.config_entries.async_update_entry(config_entry, data=new_data, version=2)
-        version = 2
-        data = new_data
-
-    if version == 2:
-        host = data[CONF_HOST]
-        port = data.get(CONF_PORT)
-        if not port:
-            try:
-                _, port = await GoodweFlowHandler.async_detect_inverter_port(host=host)
-            except InverterError as err:
-                raise ConfigEntryNotReady from err
-        protocol = data.get(CONF_PROTOCOL)
-        if not protocol:
-            protocol = "TCP" if port == GOODWE_TCP_PORT else "UDP"
-        new_data = {
-            CONF_HOST: host,
-            CONF_PORT: port,
-            CONF_PROTOCOL: protocol,
-            CONF_KEEP_ALIVE: data.get(CONF_KEEP_ALIVE),
-            CONF_MODEL_FAMILY: data.get(CONF_MODEL_FAMILY),
-            CONF_SCAN_INTERVAL: data.get(CONF_SCAN_INTERVAL),
-            CONF_NETWORK_RETRIES: data.get(CONF_NETWORK_RETRIES),
-            CONF_NETWORK_TIMEOUT: data.get(CONF_NETWORK_TIMEOUT),
-            CONF_MODBUS_ID: data.get(CONF_MODBUS_ID),
-        }
-        hass.config_entries.async_update_entry(config_entry, data=new_data, version=3)
-        data = new_data
 
     return True
